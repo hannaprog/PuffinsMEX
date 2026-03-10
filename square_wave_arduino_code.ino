@@ -1,5 +1,9 @@
 // Test run for CoolTerm CSV output - Marko 04-03-2026
 
+#include <Servo.h>          // ADDED
+Servo esc;                  // ADDED
+int escPin = 9;             // ADDED
+
 unsigned long startTime;
 
 // PWM steps (PPM microseconds) forward and backward
@@ -19,6 +23,11 @@ unsigned long last_sample_time = 0;
 
 void setup() {
   Serial.begin(115200);   // initialize serial for CSV
+
+  esc.attach(escPin);     // ADDED
+  esc.writeMicroseconds(1500); // ADDED (neutral / arm)
+  delay(5000);            // ADDED (ESC arm time)
+
   Serial.println(1500); // neutral
   delay(1000);          // small delay before start
 
@@ -43,6 +52,9 @@ void loop() {
         unsigned long now = micros();
         if (now - last_sample_time >= sample_period) {
           last_sample_time += sample_period;
+
+          esc.writeMicroseconds(pwmValue); // ADDED
+
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
           Serial.println(pwmValue);
@@ -55,6 +67,9 @@ void loop() {
         unsigned long now = micros();
         if (now - last_sample_time >= sample_period) {
           last_sample_time += sample_period;
+
+          esc.writeMicroseconds(1500); // ADDED
+
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
           Serial.println(1500); // neutral
@@ -69,6 +84,9 @@ void loop() {
     unsigned long now = micros();
     if (now - last_sample_time >= sample_period) {
       last_sample_time += sample_period;
+
+      esc.writeMicroseconds(1500); // ADDED
+
       Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
       Serial.print(",");
       Serial.println(1500); // neutral
@@ -90,6 +108,9 @@ void loop() {
         unsigned long now = micros();
         if (now - last_sample_time >= sample_period) {
           last_sample_time += sample_period;
+
+          esc.writeMicroseconds(pwmValue); // ADDED
+
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
           Serial.println(pwmValue);
@@ -102,6 +123,9 @@ void loop() {
         unsigned long now = micros();
         if (now - last_sample_time >= sample_period) {
           last_sample_time += sample_period;
+
+          esc.writeMicroseconds(1500); // ADDED
+
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
           Serial.println(1500); // neutral
