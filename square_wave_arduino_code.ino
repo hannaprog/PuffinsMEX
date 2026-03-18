@@ -3,6 +3,7 @@
 #include <Servo.h>          // ADDED
 Servo esc;                  // ADDED
 int escPin = 9;             // ADDED
+int currentPin = A0;        // ADDED for ACS712 current sensor
 
 unsigned long startTime;
 
@@ -57,7 +58,10 @@ void loop() {
 
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
-          Serial.println(pwmValue);
+          Serial.print(pwmValue);
+          Serial.print(",");
+          int currentRaw = analogRead(currentPin); // ADDED
+          Serial.println(currentRaw);               // ADDED
         }
       }
 
@@ -72,7 +76,10 @@ void loop() {
 
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
-          Serial.println(1500); // neutral
+          Serial.print(1500); // neutral
+          Serial.print(",");
+          int currentRaw = analogRead(currentPin); // ADDED
+          Serial.println(currentRaw);               // ADDED
         }
       }
     }
@@ -89,7 +96,10 @@ void loop() {
 
       Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
       Serial.print(",");
-      Serial.println(1500); // neutral
+      Serial.print(1500); // neutral
+      Serial.print(",");
+      int currentRaw = analogRead(currentPin); // ADDED
+      Serial.println(currentRaw);               // ADDED
     }
   }
 
@@ -113,7 +123,10 @@ void loop() {
 
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
-          Serial.println(pwmValue);
+          Serial.print(pwmValue);
+          Serial.print(",");
+          int currentRaw = analogRead(currentPin); // ADDED
+          Serial.println(currentRaw);               // ADDED
         }
       }
 
@@ -128,7 +141,10 @@ void loop() {
 
           Serial.print( ((double)(now - startTime)) / 1000000.0, 6 );
           Serial.print(",");
-          Serial.println(1500); // neutral
+          Serial.print(1500); // neutral
+          Serial.print(",");
+          int currentRaw = analogRead(currentPin); // ADDED
+          Serial.println(currentRaw);               // ADDED
         }
       }
     }
