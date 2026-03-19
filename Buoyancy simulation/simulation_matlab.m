@@ -52,6 +52,9 @@ for i = 1:N
     if i > 1000
         z_ref = 3;          
     end
+    if i > 5000
+        z_ref = 5;          
+    end
     % --- PID ---
     e = z_ref - z;
     e_int = e_int + e*dt;
@@ -65,7 +68,6 @@ for i = 1:N
     e_prev = e;
     
     % --- Syringe --
-    
     V_dot = k_m * u * p * area;
     V = V + V_dot*dt;
     
