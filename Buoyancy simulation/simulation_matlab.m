@@ -67,7 +67,7 @@ for i = 1:N
 
     e_prev = e;
     
-    % --- Syringe --
+    % --- Syringe ---
     V_dot = k_m * u * p * area;
     V = V + V_dot*dt;
     
