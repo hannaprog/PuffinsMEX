@@ -13,3 +13,7 @@ area = pi*(d/2)^2; % syringe, area, mm^2
 density = 1000;
 D = 5;
 W = 0;
+
+V_max = 0.0005; 
+
+d1 = 5; 
