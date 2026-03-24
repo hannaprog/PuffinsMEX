@@ -124,3 +124,43 @@ ylabel('Styrsignal u')
 xlabel('Tid (s)')
 grid on
 title('PID styrsignal')
+
+% 
+% Vill addera: 
+% 
+% Hydrostatiskt tryck på pumpen
+% % I parameter-sektionen
+% P_atm = 101325;             % Atmosfärstryck (Pa)
+% F_motor_max = 50;           % Max kraft från motor/ledskruv (N)
+% 
+% % I loopen, efter V_dot beräkning:
+% % Hydrostatiskt tryck på djup z
+% P_hydro = rho * g * z + P_atm;
+% 
+% % Tryck som motorn kan generera
+% F_motor = u * k_m * p * 0.6;  % 0.6 = verkningsgrad
+% P_motor = F_motor / A;
+% 
+% % Begränsa flöde baserat på tryckskillnad
+% if P_motor > P_hydro && u > 0  % Pumpa in vatten
+%     V_dot = V_dot * (1 - min(1, (P_hydro - P_atm) / (P_motor - P_atm)));
+% elseif u < 0  % Pumpa ut vatten (lättare på djup)
+%     V_dot = V_dot;
+% else
+%     V_dot = 0;
+% end
+% 
+% 
+% %Strömningsmotstånd i slangar och ventiler
+% % I parameter-sektionen
+% R_flow = 1e5;               % Flödesmotstånd (Pa·s/m³)
+% 
+% % I loopen, modifiera V_dot:
+% delta_P_required = R_flow * abs(V_dot);
+% if abs(P_motor - P_hydro) < delta_P_required
+%     V_dot = 0;  % Inte tillräckligt med tryck för att övervinna motståndet
+% end
+% 
+% % Tryckändring pga djupändring påverkar flödet
+% dP_dt = rho * g * w;  % Tryckändringshastighet
+% P_hydro = P_hydro + dP_dt * dt;
