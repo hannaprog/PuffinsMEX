@@ -16,17 +16,22 @@ k_m = 5;                   % motor konstant (rad/s per styr信号)
 p = 0.002;                  % ledskruv stigning (m/varv)
 d = 0.1;                    % syringe diameter (m)
 A = pi*(d/2)^2;             % syringe area (m^2)
+A_utlopp = pi*(0.01/2)^2;
 
 % Dynamik
 d1 = 5;                     % linjär dragkoefficient (N/(m/s))
 m_a = 2.5;  % added mass
 C_d = 1.0;
 A_cross = 0.07;
+motor_torque = 0.65;
+P_atm = 101325;             % Atmosfärstryck (Pa)​
+F_motor_max = 2*pi*motor_torque/p;           % Max kraft från motor/ledskruv (N)
+R_flow = 1e5;               % Flödesmotstånd (Pa·s/m³)
 
 % PID
-Kp = 2;
-Ki = 0.1;
-Kd = 5;
+Kp = 10;
+Ki = 0.1% 0.1;
+Kd = 10%20;
 
 %% SIMULERING
 dt = 0.01;
@@ -48,6 +53,8 @@ z_log = zeros(N,1);
 w_log = zeros(N,1);
 V_log = zeros(N,1);
 u_log = zeros(N,1);
+Vdot_log = zeros(N,1);
+drag_log = zeros(N,1);
 
 %% HUVUDLOOP
 for i = 1:N
@@ -59,14 +66,34 @@ for i = 1:N
     
     u = Kp*e + Ki*e_int + Kd*e_der;
     max_u = 1e-4/k_m/p/A;
-    u = max(min(u, max_u), -max_u);     % Saturera styrsignal
+    u = max(min(u, max_u), -max_u)     % Saturera styrsignal
     
     e_prev = e;
     
     % --- Aktuator (enkel modell) ---
     V_dot = k_m * u * p * A;        % Flöde in/ur syringe
-    %V_dot = max(min(V_dot, V_dot_max), -V_dot_max);
 
+    % % % Hydrostatiskt tryck på djup z
+    P_hydro = rho * g * z + P_atm;
+    
+    % % Tryck som motorn kan generera
+    F_motor = F_motor_max * u;  % 0.6 = verkningsgrad
+    P_motor = F_motor / A;
+    % 
+    % Begränsa flöde baserat på tryckskillnad
+    if P_motor > P_hydro && u > 0  % Pumpa in vatten
+        %V_dot = V_dot * (1 - min(1, (P_hydro - P_atm) / (P_motor - P_atm)));
+    elseif u <= 0  % Pumpa ut vatten (lättare på djup)
+        V_dot = V_dot;
+    else
+        V_dot = 0;
+    end
+
+    %Strömningsmotstånd i slangar och ventiler
+    delta_P_required = R_flow * abs(V_dot);
+    if abs(P_motor - P_hydro) < delta_P_required
+        V_dot = 0;  % Inte tillräckligt med tryck för att övervinna motståndet
+    end
     V = V + V_dot * dt;
     V = max(min(V, V_max), 0);      % Begränsa volym; 
     
@@ -74,7 +101,6 @@ for i = 1:N
     F_b = rho*g*V + m*g - F_pos;    % Netto flytkraft (positiv = uppåt)
     
     % --- Hydrodynamik ---
-    D = d1 * w;                     % Linjärt drag
     D = 0.5 * rho * C_d * A_cross * abs(w) * w;
     
     % --- Rörelseekvation ---
@@ -87,6 +113,7 @@ for i = 1:N
     if z <= 0 && w < 0
         w = 0;
         z = 0;
+        %V = V_innan;
     end
     
     % --- Uppdatera position ---
@@ -97,7 +124,9 @@ for i = 1:N
     z_log(i) = z;
     w_log(i) = w;
     V_log(i) = V * 1e6;             % Konvertera till ml
+    Vdot_log(i) = V_dot * 1e6; 
     u_log(i) = u;
+    drag_log(i) = D;
 end
 
 %% PLOTTA
@@ -106,7 +135,7 @@ figure;
 subplot(3,1,1)
 plot((1:N)*dt, z_log, 'b-', 'LineWidth', 1.5)
 hold on
-plot((1:N)*dt, z_ref)
+plot((1:N)*dt, z_ref*ones(N,1))
 ylabel('Djup z (m)')
 legend('Aktuell', 'Referens')
 grid on
@@ -125,42 +154,13 @@ xlabel('Tid (s)')
 grid on
 title('PID styrsignal')
 
-% 
-% Vill addera: 
-% 
-% Hydrostatiskt tryck på pumpen
-% % I parameter-sektionen
-% P_atm = 101325;             % Atmosfärstryck (Pa)
-% F_motor_max = 50;           % Max kraft från motor/ledskruv (N)
-% 
-% % I loopen, efter V_dot beräkning:
-% % Hydrostatiskt tryck på djup z
-% P_hydro = rho * g * z + P_atm;
-% 
-% % Tryck som motorn kan generera
-% F_motor = u * k_m * p * 0.6;  % 0.6 = verkningsgrad
-% P_motor = F_motor / A;
-% 
-% % Begränsa flöde baserat på tryckskillnad
-% if P_motor > P_hydro && u > 0  % Pumpa in vatten
-%     V_dot = V_dot * (1 - min(1, (P_hydro - P_atm) / (P_motor - P_atm)));
-% elseif u < 0  % Pumpa ut vatten (lättare på djup)
-%     V_dot = V_dot;
-% else
-%     V_dot = 0;
-% end
-% 
-% 
-% %Strömningsmotstånd i slangar och ventiler
-% % I parameter-sektionen
-% R_flow = 1e5;               % Flödesmotstånd (Pa·s/m³)
-% 
-% % I loopen, modifiera V_dot:
-% delta_P_required = R_flow * abs(V_dot);
-% if abs(P_motor - P_hydro) < delta_P_required
-%     V_dot = 0;  % Inte tillräckligt med tryck för att övervinna motståndet
-% end
-% 
-% % Tryckändring pga djupändring påverkar flödet
-% dP_dt = rho * g * w;  % Tryckändringshastighet
-% P_hydro = P_hydro + dP_dt * dt;
+figure;
+plot((1:N)*dt, Vdot_log, 'b-', 'LineWidth', 1.5)
+ylabel('Volym (ml)')
+grid on
+title('Ballastvolym')
+figure;
+plot((1:N)*dt, drag_log, 'b-', 'LineWidth', 1.5)
+ylabel('drag (N)')
+grid on
+title('drag')
