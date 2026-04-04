@@ -1,28 +1,28 @@
 clear; clc; close all;
 run('parameters.m');
 
-%% Inställningar
+%% Settings
 actuation_method = 'buoyancy';
-controllers = {'PID', 'Cascade PID', 'I_PD'};
-file_names = {'non_Cascaded_PID', 'Cascaded_PID', 'non_Cascaded_I_PD'};
+controllers = {'PID', 'Cascade PID', 'I\_PD'};
+file_names   = {'non_Cascaded_PID', 'Cascaded_PID', 'non_Cascaded_I_PD'};
 
-% Format per rad:
+% Each row:
 % [sine_amplitude, constant_amplitude]
 disturbances = [
-    0 0;   % ingen störning
-    1 0;   % sinus-störning
-    0 2    % konstant störning
+    0 0;   % no disturbance
+    1 0;   % sinusoidal disturbance
+    0 2    % constant disturbance
 ];
 
-simTime = 60;
+simTime = 100;
 z_ref = 3;
-tolerance = 0.05;      % 5 cm band för settling time
+tolerance = 0.05;      % 5 cm band for settling time
 sine_frequency = 0.05; % Hz
 
 results = struct();
 scenarioID = 1;
 
-%% Kör simuleringar
+%% Run simulations
 for c = 1:length(controllers)
     controller_type = controllers{c};
     model_name = file_names{c};
@@ -36,52 +36,55 @@ for c = 1:length(controllers)
         simIn = simIn.setVariable('z_ref', z_ref);
         simIn = simIn.setVariable('simTime', simTime);
 
-        % Disturbance-parametrar
+        % Disturbance parameters
         simIn = simIn.setVariable('sine_amplitude', sine_amp);
         simIn = simIn.setVariable('constant_amplitude', constant_amp);
         simIn = simIn.setVariable('sine_frequency', sine_frequency);
 
-        % Stopptid
+        % Stop time
         simIn = simIn.setModelParameter('StopTime', num2str(simTime));
 
-        % Kör simulering
+        % Run simulation
         simOut = sim(simIn);
 
-        % Hämtar loggade signaler
+        %% Read logged signals
         depth = simOut.depth.Data(:);
         time = simOut.depth.Time(:);
         reference = simOut.ref.Data(:);
         control_signal = simOut.control_signal.Data(:);
 
-        %% Prestandamått
-        control_effort = trapz(time, abs(control_signal).^2);
+        %% Performance metrics
+        control_effort = trapz(time, control_signal.^2);
         rmse = sqrt(mean((depth - reference).^2));
 
-        overshoot = max(depth - reference);
-        if overshoot < 0
-            overshoot = 0;
-        end
+        % Overshoot in percent
+        overshoot = max(depth) - z_ref;
+        overshoot = 100 * overshoot / z_ref;
 
         settling_time = computeSettlingTimeSingle(time, depth, z_ref, tolerance);
 
-        %% Disturbance-typ som text
+        %% Disturbance type
         if sine_amp == 0 && constant_amp == 0
             disturbance_type = "None";
+            disturbance_amplitude = 0;
         elseif sine_amp > 0 && constant_amp == 0
             disturbance_type = "Sinusoidal";
+            disturbance_amplitude = sine_amp;
         elseif sine_amp == 0 && constant_amp > 0
             disturbance_type = "Constant";
+            disturbance_amplitude = constant_amp;
         else
             disturbance_type = "Combined";
+            disturbance_amplitude = NaN;
         end
 
-        %% Spara resultat
+        %% Store results
         results(scenarioID).actuation = actuation_method;
         results(scenarioID).controller = controller_type;
         results(scenarioID).disturbance_type = disturbance_type;
+        results(scenarioID).disturbance_amplitude = disturbance_amplitude;
         results(scenarioID).sine_disturbance = sine_amp;
         results(scenarioID).constant_disturbance = constant_amp;
-        results(scenarioID).sine_frequency = sine_frequency;
         results(scenarioID).time = time;
         results(scenarioID).depth = depth;
         results(scenarioID).reference = reference;
@@ -90,99 +93,108 @@ for c = 1:length(controllers)
         results(scenarioID).Overshoot = overshoot;
         results(scenarioID).SettlingTime = settling_time;
         results(scenarioID).ControlEffort = control_effort;
+        results(scenarioID).sine_frequency = sine_frequency;
 
         scenarioID = scenarioID + 1;
     end
 end
 
-%% Skapa resultattabell
+%% Create summary table
 nScenarios = length(results);
 
-summary_table = table('Size', [nScenarios, 9], ...
-    'VariableTypes', {'string','string','string','double','double','double','double','double','double'}, ...
+summary_table = table('Size', [nScenarios, 8], ...
+    'VariableTypes', {'string','string','string','double','double','double','double','double'}, ...
     'VariableNames', {'Actuation','Controller','DisturbanceType', ...
-                      'SineAmplitude','ConstantAmplitude','RMSE','Overshoot','SettlingTime','ControlEffort'});
+                      'DisturbanceAmplitude','RMSE','Overshoot','SettlingTime','ControlEffort'});
 
 for i = 1:nScenarios
-    summary_table.Actuation(i) = string(results(i).actuation);
-    summary_table.Controller(i) = string(results(i).controller);
-    summary_table.DisturbanceType(i) = string(results(i).disturbance_type);
-    summary_table.SineAmplitude(i) = results(i).sine_disturbance;
-    summary_table.ConstantAmplitude(i) = results(i).constant_disturbance;
-    summary_table.RMSE(i) = results(i).RMSE;
-    summary_table.Overshoot(i) = results(i).Overshoot;
-    summary_table.SettlingTime(i) = results(i).SettlingTime;
-    summary_table.ControlEffort(i) = results(i).ControlEffort;
+    summary_table.Actuation(i)            = string(results(i).actuation);
+    summary_table.Controller(i)           = string(results(i).controller);
+    summary_table.DisturbanceType(i)      = string(results(i).disturbance_type);
+    summary_table.DisturbanceAmplitude(i) = results(i).disturbance_amplitude;
+    summary_table.RMSE(i)                 = results(i).RMSE;
+    summary_table.Overshoot(i)            = results(i).Overshoot;
+    summary_table.SettlingTime(i)         = results(i).SettlingTime;
+    summary_table.ControlEffort(i)        = results(i).ControlEffort;
 end
 
 disp(' ')
 disp('--- Summary table ---')
 disp(summary_table)
 
-%% Plot 1: utan disturbance
-figure;
-hold on; grid on;
+%% LaTeX table export
+disp(' ')
+disp('--- LaTeX table ---')
 
-for i = 1:nScenarios
+fprintf('\\begin{table}[htbp]\n');
+fprintf('\\centering\n');
+fprintf('\\caption{Summary of simulation results for different controllers and disturbance scenarios.}\n');
+fprintf('\\label{tab:summary_results}\n');
+fprintf('\\begin{tabular}{llrrrrr}\n');
+fprintf('\\toprule\n');
+fprintf('Controller & \\makecell{Disturbance\\\\Type} & \\makecell{Amplitude\\\\[-1mm][N]} & \\makecell{RMSE\\\\[-1mm][m]} & \\makecell{Overshoot\\\\[-1mm][\\%%]} & \\makecell{Settling time\\\\[-1mm][s]} & \\makecell{Control effort\\\\[-1mm][\(u^2\) s]} \\\\\n');
+fprintf('\\midrule\n');
+
+for i = 1:height(summary_table)
+    controller_latex = char(summary_table.Controller(i));
+    controller_latex = strrep(controller_latex, '_', '\_');
+
+    if contains(controller_latex, 'Cascade PID')
+        fprintf('\\rowcolor{gray!15} ');
+    elseif contains(controller_latex, 'I\\_PD')
+        fprintf('\\rowcolor{blue!8} ');
+    elseif contains(controller_latex, 'PID')
+        fprintf('\\rowcolor{green!10} ');
+    end
+
+    fprintf('%s & %s & %.2f & %.3f & %.2f & %.3f & %.3f \\\\\n', ...
+        controller_latex, ...
+        char(summary_table.DisturbanceType(i)), ...
+        summary_table.DisturbanceAmplitude(i), ...
+        summary_table.RMSE(i), ...
+        summary_table.Overshoot(i), ...
+        summary_table.SettlingTime(i), ...
+        summary_table.ControlEffort(i));
+end
+
+fprintf('\\bottomrule\n');
+fprintf('\\end{tabular}\n');
+fprintf('\\end{table}\n');
+
+
+%% Plot: step response and control signal
+figure('Color','w','Position',[100 100 1100 420]);
+
+% Vänster: step response utan störning
+subplot(1,2,1);
+hold on; grid on; box on;
+
+for i = 1:length(results)
     if results(i).sine_disturbance == 0 && results(i).constant_disturbance == 0
         plot(results(i).time, results(i).depth, 'LineWidth', 1.8, ...
             'DisplayName', char(results(i).controller));
     end
 end
 
-plot(results(1).time, z_ref*ones(size(results(1).time)), '--k', ...
-    'LineWidth', 1.5, 'DisplayName', 'Reference');
+for i = 1:length(results)
+    if results(i).sine_disturbance == 0 && results(i).constant_disturbance == 0
+        plot(results(i).time, results(i).reference, '--k', 'LineWidth', 1.5, ...
+            'DisplayName', 'Reference');
+        break
+    end
+end
 
 xlabel('Time [s]');
 ylabel('Depth [m]');
-title('Depth response without disturbance');
-legend('Location', 'best');
+title('Step response without disturbance');
+legend('Location','best');
+set(gca,'FontSize',11);
 
-%% Plot 2: ett subplot per disturbancefall
-figure;
+% Höger: styrsignal utan störning
+subplot(1,2,2);
+hold on; grid on; box on;
 
-for d = 1:size(disturbances,1)
-    subplot(size(disturbances,1),1,d);
-    hold on; grid on;
-
-    current_sine = disturbances(d,1);
-    current_constant = disturbances(d,2);
-
-    for i = 1:nScenarios
-        if results(i).sine_disturbance == current_sine && ...
-           results(i).constant_disturbance == current_constant
-
-            plot(results(i).time, results(i).depth, 'LineWidth', 1.8, ...
-                'DisplayName', char(results(i).controller));
-        end
-    end
-
-    plot(results(1).time, z_ref*ones(size(results(1).time)), '--k', ...
-        'LineWidth', 1.2, 'DisplayName', 'Reference');
-
-    xlabel('Time [s]');
-    ylabel('Depth [m]');
-
-    if current_sine == 0 && current_constant == 0
-        title('No disturbance');
-    elseif current_sine > 0 && current_constant == 0
-        title(sprintf('Sinusoidal disturbance: A = %.1f, f = %.2f Hz', ...
-            current_sine, sine_frequency));
-    elseif current_sine == 0 && current_constant > 0
-        title(sprintf('Constant disturbance: A = %.1f', current_constant));
-    else
-        title(sprintf('Combined disturbance: sine = %.1f, constant = %.1f', ...
-            current_sine, current_constant));
-    end
-
-    legend('Location', 'best');
-end
-
-%% Plot 3: styrsignaler utan disturbance
-figure;
-hold on; grid on;
-
-for i = 1:nScenarios
+for i = 1:length(results)
     if results(i).sine_disturbance == 0 && results(i).constant_disturbance == 0
         plot(results(i).time, results(i).control_signal, 'LineWidth', 1.8, ...
             'DisplayName', char(results(i).controller));
@@ -191,5 +203,64 @@ end
 
 xlabel('Time [s]');
 ylabel('Control signal');
-title('Control signals without disturbance');
-legend('Location', 'best');
+title('Control signal without disturbance');
+legend('Location','best');
+set(gca,'FontSize',11);
+
+%% Plot 2: one subplot per disturbance case
+figure('Color','w','Position',[100 100 1100 420]);
+
+% Vänster: sinus disturbance
+subplot(1,2,1);
+hold on; grid on; box on;
+
+for i = 1:length(results)
+    if results(i).sine_disturbance > 0 && results(i).constant_disturbance == 0
+        plot(results(i).time, results(i).depth, 'LineWidth', 1.8, ...
+            'DisplayName', char(results(i).controller));
+    end
+end
+
+% Referens
+for i = 1:length(results)
+    if results(i).sine_disturbance > 0 && results(i).constant_disturbance == 0
+        plot(results(i).time, results(i).reference, '--k', 'LineWidth', 1.5, ...
+            'DisplayName', 'Reference');
+        break
+    end
+end
+
+xlabel('Time [s]');
+ylabel('Depth [m]');
+title(sprintf('Sinusoidal disturbance (A = %.1f, f = %.2f Hz)', ...
+    results(find([results.sine_disturbance] > 0 & [results.constant_disturbance] == 0,1)).sine_disturbance, ...
+    results(find([results.sine_disturbance] > 0 & [results.constant_disturbance] == 0,1)).sine_frequency));
+legend('Location','best');
+set(gca,'FontSize',11);
+
+% Höger: constant disturbance
+subplot(1,2,2);
+hold on; grid on; box on;
+
+for i = 1:length(results)
+    if results(i).sine_disturbance == 0 && results(i).constant_disturbance > 0
+        plot(results(i).time, results(i).depth, 'LineWidth', 1.8, ...
+            'DisplayName', char(results(i).controller));
+    end
+end
+
+% Referens
+for i = 1:length(results)
+    if results(i).sine_disturbance == 0 && results(i).constant_disturbance > 0
+        plot(results(i).time, results(i).reference, '--k', 'LineWidth', 1.5, ...
+            'DisplayName', 'Reference');
+        break
+    end
+end
+
+xlabel('Time [s]');
+ylabel('Depth [m]');
+title(sprintf('Constant disturbance (A = %.1f) applied at t = 40s', ...
+    results(find([results.sine_disturbance] == 0 & [results.constant_disturbance] > 0,1)).constant_disturbance));
+legend('Location','best');
+set(gca,'FontSize',11);
