@@ -430,7 +430,7 @@
 11.170021,87.50,-0.003843
 11.180041,87.50,0.001040
 11.190052,87.50,-0.010362
-11.200077,87.5þCalibrating current sensor...
+11.200077,87.5 Calibrating current sensor...
 Make sure motor is NOT moving!
 Zero ADC: 465.38
 Zero voltage: 2.275
