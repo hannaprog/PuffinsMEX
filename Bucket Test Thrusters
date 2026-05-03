@@ -1,0 +1,67 @@
+/*
+
+  sdOK = initSD();
+
+  readSensors();
+
+  if (!validateSensors()) {
+    fatalErrorStop("Initial sensor values invalid");
+  }
+
+  delay(START_DELAY_SEC * 1000UL);
+
+  startTime_ms = millis();
+
+  lastSensor_ms = startTime_ms;
+  lastControl_ms = startTime_ms;
+  lastLog_ms = startTime_ms;
+  lastPrint_ms = startTime_ms;
+  lastFlush_ms = startTime_ms;
+
+  Serial.println(F("Controller active."));
+}
+
+// ================================================================
+// LOOP
+// ================================================================
+void loop() {
+
+  if (fatalError) return;
+
+  unsigned long now_ms = millis();
+  unsigned long elapsed_ms = now_ms - startTime_ms;
+
+  if (now_ms - lastSensor_ms >= SENSOR_PERIOD_MS) {
+
+    lastSensor_ms += SENSOR_PERIOD_MS;
+
+    readSensors();
+
+    if (!validateSensors()) {
+      fatalErrorStop("Sensor values invalid during run");
+    }
+  }
+
+  if (now_ms - lastControl_ms >= CONTROL_PERIOD_MS) {
+
+    lastControl_ms += CONTROL_PERIOD_MS;
+
+    updateControl(now_ms);
+  }
+
+  if (now_ms - lastLog_ms >= LOG_PERIOD_MS) {
+
+    lastLog_ms += LOG_PERIOD_MS;
+
+    logData(elapsed_ms);
+  }
+
+  flushLogIfNeeded(now_ms);
+
+  if (now_ms - lastPrint_ms >= PRINT_PERIOD_MS) {
+
+    lastPrint_ms += PRINT_PERIOD_MS;
+
+    printStatus(elapsed_ms);
+  }
+}
