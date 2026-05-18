@@ -1,0 +1,641 @@
+/*
+  AUV Main Controller
+  First reliable thesis test version
+*/
+
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Servo.h>
+#include "MS5837.h"
+
+// ================================================================
+// PIN DEFINITIONS
+// ================================================================
+const int SD_CHIP_SELECT_PIN = 10;
+const int CURRENT_PIN = A0;
+
+const int THRUSTER_LEFT_PIN = 9;
+const int THRUSTER_RIGHT_PIN = 6;
+
+const int STEPPER_DIR_PIN = 2;
+const int STEPPER_STEP_PIN = 3;
+const int STEPPER_ENABLE_PIN = 4;
+
+// ================================================================
+// MODE
+// ================================================================
+// Select mode here before uploading to Arduino:
+// MODE_THRUSTER = use thrusters for depth control
+// MODE_BUOYANCY = use stepper/piston buoyancy system for depth control
+enum ControlMode {
+  MODE_THRUSTER = 1,
+  MODE_BUOYANCY = 2
+};
+
+const ControlMode mode = MODE_THRUSTER;
+
+// ================================================================
+// PID GAINS - SEPARATE FOR THRUSTER AND BUOYANCY
+// ================================================================
+struct PidGains {
+  float Kp;
+  float Ki;
+  float Kd;
+};
+const PidGains GAINS_THRUSTER = {1.0, 2.0, 3.0};
+
+// Buoyancy is slower and delayed. Start gentle to avoid overshoot.
+const PidGains GAINS_BUOYANCY = {1.0, 2.0, 3.0};
+
+float Kp = GAINS_THRUSTER.Kp;
+float Ki = GAINS_THRUSTER.Ki;
+float Kd = GAINS_THRUSTER.Kd;
+
+float pidIntegral = 0.0;
+float previousError = 0.0;
+bool pidFirstRun = true;
+const float INTEGRAL_LIMIT = 100.0;
+
+// ================================================================
+// THRUSTER SETTINGS
+// ================================================================
+Servo thrusterLeft;
+Servo thrusterRight;
+
+const int ESC_NEUTRAL_US = 1500;
+const int ESC_MIN_US = 1100;
+const int ESC_MAX_US = 1900;
+
+// Conservative output limit around neutral for first tests.
+const int THRUSTER_MAX_DELTA_US = 200;
+
+// Change to -1 if the thruster direction is wrong.
+const int THRUSTER_LEFT_SIGN = 1;
+const int THRUSTER_RIGHT_SIGN = 1;
+
+int lastThrusterLeft_us = ESC_NEUTRAL_US;
+int lastThrusterRight_us = ESC_NEUTRAL_US;
+
+// ================================================================
+// STEPPER / PISTON SETTINGS
+// ================================================================
+const int STEPS_PER_REVOLUTION = 200;
+
+// Conservative for Arduino Uno software stepping while also logging and reading sensors.
+const float STEPPER_MAX_RPM = 150.0;
+
+// 2 mm/rev, 20 cm stroke -> 100 rev -> 20,000 full steps. Change to rätt längd
+const long PISTON_MIN_STEPS = 0;
+const long PISTON_MAX_STEPS = 20000;
+const long PISTON_START_STEPS = 0;
+
+// Buoyancy controller output is normalized between -1 and 1.
+const float BUOYANCY_U_DEADBAND = 0.05;
+
+// Change to -1 if piston direction is wrong.
+const int STEPPER_DIRECTION_SIGN = 1;
+
+long pistonPosition_steps = PISTON_START_STEPS;
+bool stepperShouldRun = false;
+int requestedStepperDir = 1;
+float requestedStepperRpm = 0.0;
+bool stepPinState = false;
+unsigned long lastStepToggle_us = 0;
+
+// ================================================================
+// MISSION PROFILE
+// ================================================================
+struct MissionPoint {
+  unsigned long time_ms;
+  float depth_m;
+};
+
+// Step mission profile for thesis testing.
+// First 10 s at surface target, then depth steps.
+const MissionPoint mission[] = {
+  {0UL,      0.0},
+  {10000UL,  0.0},
+  {190000UL, 0.5},
+  {370000UL, 1.0},
+  {550000UL, 1.5},
+  {730000UL, 2.0}
+};
+
+const int missionPoints = sizeof(mission) / sizeof(mission[0]);
+float targetDepth_m = 0.0;
+
+const float MAX_SAFE_DEPTH_M = 2.50;
+
+// ================================================================
+// SENSOR SETTINGS
+// ================================================================
+MS5837 pressureSensor;
+
+const float WATER_DENSITY = 997.0;      // freshwater. Use 1029 for seawater.
+
+const float ADC_REF_VOLTAGE = 5.0;
+const int ADC_MAX = 1023;
+
+const float ACS712_SENSITIVITY = 0.100;
+float currentZeroAdc = 512.0;
+
+float depth_m = 0.0;
+float pressure_mbar = 0.0;
+float temperature_C = 0.0;
+float current_A = 0.0;
+int currentRawAdc = 0;
+float lastControlOutput = 0.0;      
+
+// ================================================================
+// TIMING
+// ================================================================
+const unsigned long SENSOR_PERIOD_MS = 50;    // 20 Hz
+const unsigned long CONTROL_PERIOD_MS = 50;   // 20 Hz
+const unsigned long LOG_PERIOD_MS = 100;      // 10 Hz
+const unsigned long PRINT_PERIOD_MS = 500;    // 2 Hz
+const unsigned long FLUSH_PERIOD_MS = 1000;   // flush SD once per second
+const unsigned long START_DELAY_SEC = 15;
+
+unsigned long startTime_ms = 0;
+unsigned long lastSensor_ms = 0;
+unsigned long lastControl_ms = 0;
+unsigned long lastLog_ms = 0;
+unsigned long lastPrint_ms = 0;
+unsigned long lastFlush_ms = 0;
+
+// ================================================================
+// SD LOGGING
+// ================================================================
+File logFile;
+char logFilename[] = "AUVLOG00.CSV";
+bool sdOK = false;
+bool fatalError = false;
+
+// ================================================================
+// HELPER FUNCTIONS
+// ================================================================
+float clampFloat(float value, float minValue, float maxValue) {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
+int clampInt(int value, int minValue, int maxValue) {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
+void stopThrusters() {
+  thrusterLeft.writeMicroseconds(ESC_NEUTRAL_US);
+  thrusterRight.writeMicroseconds(ESC_NEUTRAL_US);
+  lastThrusterLeft_us = ESC_NEUTRAL_US;
+  lastThrusterRight_us = ESC_NEUTRAL_US;
+}
+
+void stopStepper() {
+  stepperShouldRun = false;
+  requestedStepperRpm = 0.0;
+  digitalWrite(STEPPER_STEP_PIN, LOW);
+  stepPinState = false;
+  digitalWrite(STEPPER_ENABLE_PIN, LOW);
+}
+
+void allActuatorsSafe() {
+  stopThrusters();
+  stopStepper();
+}
+
+void fatalErrorStop(const char* message) {
+  if (fatalError) return;
+
+  fatalError = true;
+  allActuatorsSafe();
+
+  Serial.print(F("FATAL ERROR: "));
+  Serial.println(message);
+
+  if (sdOK && logFile) {
+    logFile.print(F("ERROR,"));
+    logFile.println(message);
+    logFile.flush();
+    logFile.close();
+  }
+
+  while (true) {
+    delay(1000);
+  }
+}
+
+void setPidGainsForMode(ControlMode selectedMode) {
+  if (selectedMode == MODE_THRUSTER) {
+    Kp = GAINS_THRUSTER.Kp;
+    Ki = GAINS_THRUSTER.Ki;
+    Kd = GAINS_THRUSTER.Kd;
+    Serial.println(F("PID gains set for THRUSTER mode."));
+  } else if (selectedMode == MODE_BUOYANCY) {
+    Kp = GAINS_BUOYANCY.Kp;
+    Ki = GAINS_BUOYANCY.Ki;
+    Kd = GAINS_BUOYANCY.Kd;
+    Serial.println(F("PID gains set for BUOYANCY mode."));
+  }
+
+  pidIntegral = 0.0;
+  previousError = 0.0;
+  pidFirstRun = true;
+
+  Serial.print(F("Kp=")); Serial.print(Kp, 3);
+  Serial.print(F(", Ki=")); Serial.print(Ki, 3);
+  Serial.print(F(", Kd=")); Serial.println(Kd, 3);
+}
+
+void calibrateCurrentSensor() {
+  Serial.println(F("Calibrating ACS712 zero point. Keep motors OFF..."));
+
+  long sum = 0;
+  const int samples = 300;
+
+  for (int i = 0; i < samples; i++) {
+    sum += analogRead(CURRENT_PIN);
+    delay(5);
+  }
+
+  currentZeroAdc = sum / (float)samples;
+
+  Serial.print(F("ACS712 zero ADC = "));
+  Serial.println(currentZeroAdc, 2);
+}
+
+float readCurrent_A() {
+  currentRawAdc = analogRead(CURRENT_PIN);
+
+  float voltage = (currentRawAdc / (float)ADC_MAX) * ADC_REF_VOLTAGE;
+  float zeroVoltage = (currentZeroAdc / (float)ADC_MAX) * ADC_REF_VOLTAGE;
+
+  float current = (voltage - zeroVoltage) / ACS712_SENSITIVITY;
+
+  return current;
+}
+
+bool initPressureSensor() {
+  Wire.begin();
+
+  pressureSensor.setModel(MS5837::MS5837_30BA);
+  pressureSensor.setFluidDensity(WATER_DENSITY);
+
+  if (!pressureSensor.init()) {
+    return false;
+  }
+
+  Serial.println(F("MS5837 initialized."));
+  return true;
+}
+
+void readSensors() {
+  pressureSensor.read();
+
+  pressure_mbar = pressureSensor.pressure();
+  temperature_C = pressureSensor.temperature();
+  depth_m = pressureSensor.depth();
+  current_A = readCurrent_A();
+}
+
+bool validateSensors() {
+  // MS5837 pressure is in mbar. At surface normally around 1000 mbar.
+  // 10000 mbar is roughly 90 m water equivalent absolute pressure.
+  if (pressure_mbar < 500.0 || pressure_mbar > 10000.0) return false;
+  if (temperature_C < -10.0 || temperature_C > 50.0) return false;
+  if (depth_m < -1.0 || depth_m > 20.0) return false;
+
+  return true;
+}
+
+bool initSD() {
+  Serial.print(F("Initializing SD card... "));
+
+  if (!SD.begin(SD_CHIP_SELECT_PIN)) {
+    Serial.println(F("failed."));
+    return false;
+  }
+
+  Serial.println(F("OK."));
+
+  for (int i = 0; i < 100; i++) {
+    logFilename[6] = '0' + (i / 10);
+    logFilename[7] = '0' + (i % 10);
+
+    if (!SD.exists(logFilename)) {
+      logFile = SD.open(logFilename, FILE_WRITE);
+
+      if (logFile) {
+        logFile.println(F("time_s,mode,targetDepth_m,depth_m,pressure_mbar,temp_C,current_A,currentRawAdc,controlOutput,thrusterLeft_us,thrusterRight_us,piston_steps,stepper_rpm,stepper_dir,Kp,Ki,Kd"));
+        logFile.flush();
+
+        Serial.print(F("Logging to "));
+        Serial.println(logFilename);
+        return true;
+      }
+    }
+  }
+
+  Serial.println(F("Could not create log file."));
+  return false;
+}
+
+void armESCs() {
+  Serial.println(F("Arming ESCs at neutral..."));
+
+  thrusterLeft.attach(THRUSTER_LEFT_PIN);
+  thrusterRight.attach(THRUSTER_RIGHT_PIN);
+  stopThrusters();
+
+  delay(5000);  // Blocking is acceptable in setup.
+
+  Serial.println(F("ESCs armed."));
+}
+
+float computePID(float setpoint, float measurement, float dt_s) {
+  float error = setpoint - measurement;
+
+  if (pidFirstRun) {
+    previousError = error;
+    pidFirstRun = false;
+  }
+
+  pidIntegral += error * dt_s;
+  pidIntegral = clampFloat(pidIntegral, -INTEGRAL_LIMIT, INTEGRAL_LIMIT);
+
+  float derivative = (error - previousError) / dt_s;
+  previousError = error;
+
+  return Kp * error + Ki * pidIntegral + Kd * derivative;
+}
+
+void applyThrusterControl(float u) {
+  int delta = (int)clampFloat(u, -THRUSTER_MAX_DELTA_US, THRUSTER_MAX_DELTA_US);
+
+  int leftCmd = ESC_NEUTRAL_US + THRUSTER_LEFT_SIGN * delta;
+  int rightCmd = ESC_NEUTRAL_US + THRUSTER_RIGHT_SIGN * delta;
+
+  leftCmd = clampInt(leftCmd, ESC_MIN_US, ESC_MAX_US);
+  rightCmd = clampInt(rightCmd, ESC_MIN_US, ESC_MAX_US);
+
+  thrusterLeft.writeMicroseconds(leftCmd);
+  thrusterRight.writeMicroseconds(rightCmd);
+
+  lastThrusterLeft_us = leftCmd;
+  lastThrusterRight_us = rightCmd;
+}
+
+void requestStepperControl(float uNormalized) {
+  // uNormalized should be between -1 and 1.
+  // u > 0 means move piston in the direction that makes the vehicle go deeper.
+  // u < 0 means move piston in the direction that makes the vehicle go shallower.
+
+  uNormalized = clampFloat(uNormalized, -1.0, 1.0);
+
+  if (abs(uNormalized) < BUOYANCY_U_DEADBAND) {
+    stepperShouldRun = false;
+    requestedStepperRpm = 0.0;
+    return;
+  }
+
+  int dir = (uNormalized > 0.0) ? 1 : -1;
+  dir *= STEPPER_DIRECTION_SIGN;
+
+  // Software limits based on counted step position.
+  if (dir > 0 && pistonPosition_steps >= PISTON_MAX_STEPS) {
+    stepperShouldRun = false;
+    requestedStepperRpm = 0.0;
+    return;
+  }
+
+  if (dir < 0 && pistonPosition_steps <= PISTON_MIN_STEPS) {
+    stepperShouldRun = false;
+    requestedStepperRpm = 0.0;
+    return;
+  }
+
+  requestedStepperDir = dir;
+  requestedStepperRpm = abs(uNormalized) * STEPPER_MAX_RPM;
+  stepperShouldRun = true;
+}
+
+void updateStepperPulse() {
+  if (!stepperShouldRun || requestedStepperRpm <= 0.0) {
+    digitalWrite(STEPPER_STEP_PIN, LOW);
+    stepPinState = false;
+    digitalWrite(STEPPER_ENABLE_PIN, LOW);
+    return;
+  }
+
+  if ((requestedStepperDir > 0 && pistonPosition_steps >= PISTON_MAX_STEPS) ||
+      (requestedStepperDir < 0 && pistonPosition_steps <= PISTON_MIN_STEPS)) {
+    stopStepper();
+    return;
+  }
+
+  digitalWrite(STEPPER_ENABLE_PIN, HIGH);
+  digitalWrite(STEPPER_DIR_PIN, requestedStepperDir > 0 ? HIGH : LOW);
+
+  float stepFreq = (requestedStepperRpm / 60.0) * STEPS_PER_REVOLUTION;
+  unsigned long halfPeriod_us = (unsigned long)(500000.0 / stepFreq);
+
+  unsigned long now_us = micros();
+
+  if (now_us - lastStepToggle_us >= halfPeriod_us) {
+    lastStepToggle_us = now_us;
+    stepPinState = !stepPinState;
+    digitalWrite(STEPPER_STEP_PIN, stepPinState);
+
+    // Count one full step on the rising edge.
+    if (stepPinState) {
+      pistonPosition_steps += requestedStepperDir;
+    }
+  }
+}
+
+void updateMissionTarget(unsigned long elapsed_ms) {
+  for (int i = 0; i < missionPoints - 1; i++) {
+    if (elapsed_ms >= mission[i].time_ms && elapsed_ms < mission[i + 1].time_ms) {
+      targetDepth_m = mission[i].depth_m;
+      return;
+    }
+  }
+
+  targetDepth_m = mission[missionPoints - 1].depth_m;
+}
+
+void updateControl(unsigned long now_ms) {
+  static unsigned long previousControlTime_ms = 0;
+
+  float dt_s;
+  if (previousControlTime_ms == 0) {
+    dt_s = CONTROL_PERIOD_MS / 1000.0;
+  } else {
+    dt_s = (now_ms - previousControlTime_ms) / 1000.0;
+  }
+
+  previousControlTime_ms = now_ms;
+
+  if (dt_s <= 0.0) return;
+
+  if (depth_m > MAX_SAFE_DEPTH_M) {
+    fatalErrorStop("Maximum safe depth exceeded");
+    return;
+  }
+
+  float pidOutput = computePID(targetDepth_m, depth_m, dt_s);
+
+  if (mode == MODE_THRUSTER) {
+    float pwmDelta_us = clampFloat(pidOutput, -THRUSTER_MAX_DELTA_US, THRUSTER_MAX_DELTA_US);
+    lastControlOutput = pwmDelta_us;
+    applyThrusterControl(pwmDelta_us);
+  } else if (mode == MODE_BUOYANCY) {
+    stopThrusters();
+
+    float uNormalized = clampFloat(pidOutput, -1.0, 1.0);
+    lastControlOutput = uNormalized;
+    requestStepperControl(uNormalized);
+  } else {
+    allActuatorsSafe();
+  }
+}
+
+void logData(unsigned long elapsed_ms) {
+  if (!sdOK || !logFile) return;
+
+  float time_s = elapsed_ms / 1000.0;
+
+  logFile.print(time_s, 3); logFile.print(',');
+  logFile.print((int)mode); logFile.print(',');
+  logFile.print(targetDepth_m, 4); logFile.print(',');
+  logFile.print(depth_m, 4); logFile.print(',');
+  logFile.print(pressure_mbar, 2); logFile.print(',');
+  logFile.print(temperature_C, 2); logFile.print(',');
+  logFile.print(current_A, 5); logFile.print(',');
+  logFile.print(currentRawAdc); logFile.print(',');
+  logFile.print(lastControlOutput, 3); logFile.print(',');
+  logFile.print(lastThrusterLeft_us); logFile.print(',');
+  logFile.print(lastThrusterRight_us); logFile.print(',');
+  logFile.print(pistonPosition_steps); logFile.print(',');
+  logFile.print(requestedStepperRpm, 2); logFile.print(',');
+  logFile.print(requestedStepperDir); logFile.print(',');
+  logFile.print(Kp, 3); logFile.print(',');
+  logFile.print(Ki, 3); logFile.print(',');
+  logFile.println(Kd, 3);
+}
+
+void flushLogIfNeeded(unsigned long now_ms) {
+  if (!sdOK || !logFile) return;
+
+  if (now_ms - lastFlush_ms >= FLUSH_PERIOD_MS) {
+    lastFlush_ms += FLUSH_PERIOD_MS;
+    logFile.flush();
+  }
+}
+
+void printStatus(unsigned long elapsed_ms) {
+  Serial.print(F("t=")); Serial.print(elapsed_ms / 1000.0, 1);
+  Serial.print(F(" s, mode=")); Serial.print((int)mode);
+  Serial.print(F(", target=")); Serial.print(targetDepth_m, 2);
+  Serial.print(F(" m, depth=")); Serial.print(depth_m, 3);
+  Serial.print(F(" m, I=")); Serial.print(current_A, 3);
+  Serial.print(F(" A, ADC=")); Serial.print(currentRawAdc);
+  Serial.print(F(", u=")); Serial.print(lastControlOutput, 2);
+  Serial.print(F(", PWM_L=")); Serial.print(lastThrusterLeft_us);
+  Serial.print(F(", PWM_R=")); Serial.print(lastThrusterRight_us);
+  Serial.print(F(", piston=")); Serial.print(pistonPosition_steps);
+  Serial.print(F(", rpm=")); Serial.println(requestedStepperRpm, 1);
+}
+
+// ================================================================
+// SETUP
+// ================================================================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(STEPPER_STEP_PIN, OUTPUT);
+  pinMode(STEPPER_DIR_PIN, OUTPUT);
+  pinMode(STEPPER_ENABLE_PIN, OUTPUT);
+  digitalWrite(STEPPER_ENABLE_PIN, LOW);
+
+  // Attach ESCs early so stopThrusters() is valid.
+  thrusterLeft.attach(THRUSTER_LEFT_PIN);
+  thrusterRight.attach(THRUSTER_RIGHT_PIN);
+
+  allActuatorsSafe();
+
+  Serial.println(F("AUV controller starting..."));
+
+  setPidGainsForMode(mode);
+
+  if (!initPressureSensor()) {
+    fatalErrorStop("MS5837 sensor init failed");
+  }
+
+  armESCs();
+
+  calibrateCurrentSensor();
+
+  sdOK = initSD();
+
+  readSensors();
+  if (!validateSensors()) {
+    fatalErrorStop("Initial sensor values invalid");
+  }
+
+  delay(START_DELAY_SEC * 1000UL); //delay på 10s så vi hinner sätta Puffin i vattnet
+
+  startTime_ms = millis();
+  lastSensor_ms = startTime_ms;
+  lastControl_ms = startTime_ms;
+  lastLog_ms = startTime_ms;
+  lastPrint_ms = startTime_ms;
+  lastFlush_ms = startTime_ms;
+
+  Serial.println(F("time_s,mode,targetDepth_m,depth_m,pressure_mbar,temp_C,current_A,currentRawAdc,controlOutput,thrusterLeft_us,thrusterRight_us,piston_steps,stepper_rpm,stepper_dir,Kp,Ki,Kd"));
+}
+
+// ================================================================
+// LOOP
+// ================================================================
+void loop() {
+  if (fatalError) return;
+
+  unsigned long now_ms = millis();
+  unsigned long elapsed_ms = now_ms - startTime_ms;
+
+  // Stepper pulse update must run as often as possible.
+  updateStepperPulse();
+
+  // Mission target can update every loop. It is lightweight.
+  updateMissionTarget(elapsed_ms);
+
+  if (now_ms - lastSensor_ms >= SENSOR_PERIOD_MS) {
+    lastSensor_ms += SENSOR_PERIOD_MS;
+    readSensors();
+
+    if (!validateSensors()) {
+      fatalErrorStop("Sensor values invalid during run");
+    }
+  }
+
+  if (now_ms - lastControl_ms >= CONTROL_PERIOD_MS) {
+    lastControl_ms += CONTROL_PERIOD_MS;
+    updateControl(now_ms);
+  }
+
+  if (now_ms - lastLog_ms >= LOG_PERIOD_MS) {
+    lastLog_ms += LOG_PERIOD_MS;
+    logData(elapsed_ms);
+  }
+
+  flushLogIfNeeded(now_ms);
+
+  if (now_ms - lastPrint_ms >= PRINT_PERIOD_MS) {
+    lastPrint_ms += PRINT_PERIOD_MS;
+    printStatus(elapsed_ms);
+  }
+}

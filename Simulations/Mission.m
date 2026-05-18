@@ -5,7 +5,7 @@ run('parameters.m');
 actuation_method = 'buoyancy';
 
 controller_type = 'PID';
-model_name = 'PID_control';
+model_name = 'Copy_of_PID_control';
 
 hoverTime = 180;   % 3 minutes at each depth level
 startTime = 10;    % first step starts at 10 s

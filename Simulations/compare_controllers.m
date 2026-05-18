@@ -5,42 +5,34 @@ run('parameters.m');
 actuation_method = 'buoyancy';
 
 controllers = {'PID', 'I-PD', 'Cascade PID'};
-file_names  = {'PID_control', 'I_PD_control', 'PID_cascaded_control'};
+file_names  = {'Copy_of_PID_control', 'I_PD_control', 'Copy_2_of_PID_control'};
 
-simTime = 300;
-tolerance = 0.05;      % 5 cm band
+trackingSimTime = 130;
+disturbanceSimTime = 400;
+
+tolerance = 0.05;
 disturbance_start_time = 120;
 
-% Disturbance cases:
-% [sine_amplitude, constant_amplitude, sine_frequency]
 disturbance_cases = [
-    0.5 0 0.03;   % sinusoidal disturbance, low frequency
-    0.5 0 0.05;   % sinusoidal disturbance, nominal frequency
-    0.5 0 0.10;   % sinusoidal disturbance, higher frequency
-    0   2 0.1       % constant disturbance
+    0.5 0 0.03;
+    0.5 0 0.05;
+    0.5 0 0.10;
+    0   2 0.1
 ];
 
-%% ============================================================
-%  REFERENCE TRACKING WITHOUT DISTURBANCE
-%  ============================================================
+%% Reference tracking without disturbance
 
-tracking_change_times  = [0 5 5 150 150 simTime]';
-tracking_change_values = [0 0 0.5 0.5 3 3]';
+tracking_change_times  = [0 5 5 trackingSimTime]';
+tracking_change_values = [0 0 1 1]';
 
 tracking_ref = timeseries(tracking_change_values, tracking_change_times);
 tracking_ref = setinterpmethod(tracking_ref, 'zoh');
 
-stepDefs(1).Label  = "0--0.5 m";
+stepDefs(1).Label  = "0--1 m";
 stepDefs(1).tStart = 5;
-stepDefs(1).tEnd   = 150;
+stepDefs(1).tEnd   = trackingSimTime;
 stepDefs(1).y0     = 0;
-stepDefs(1).yFinal = 0.5;
-
-stepDefs(2).Label  = "0.5--3 m";
-stepDefs(2).tStart = 150;
-stepDefs(2).tEnd   = simTime;
-stepDefs(2).y0     = 0.5;
-stepDefs(2).yFinal = 3.0;
+stepDefs(1).yFinal = 1.0;
 
 trackingResults = struct();
 trackingMetrics = struct();
@@ -57,14 +49,14 @@ for c = 1:length(controllers)
 
     simIn = simIn.setVariable('actuation_method', actuation_method);
     simIn = simIn.setVariable('simin', tracking_ref);
-    simIn = simIn.setVariable('simTime', simTime);
+    simIn = simIn.setVariable('simTime', trackingSimTime);
 
     simIn = simIn.setVariable('sine_amplitude', 0);
     simIn = simIn.setVariable('constant_amplitude', 0);
     simIn = simIn.setVariable('sine_frequency', 0.05);
     simIn = simIn.setVariable('disturbance_start_time', 0);
 
-    simIn = simIn.setModelParameter('StopTime', num2str(simTime));
+    simIn = simIn.setModelParameter('StopTime', num2str(trackingSimTime));
 
     simOut = sim(simIn);
 
@@ -84,27 +76,23 @@ for c = 1:length(controllers)
     trackingResults(trackingScenarioID).energy = total_energy;
     trackingResults(trackingScenarioID).time_energy = time_energy;
 
-    for s = 1:length(stepDefs)
+    metrics = computeStepTrackingMetrics( ...
+        time, depth, reference, ...
+        time_energy, total_energy, ...
+        stepDefs(1).tStart, stepDefs(1).tEnd, ...
+        stepDefs(1).y0, stepDefs(1).yFinal, ...
+        tolerance);
 
-        metrics = computeStepTrackingMetrics( ...
-            time, depth, reference, ...
-            time_energy, total_energy, ...
-            stepDefs(s).tStart, stepDefs(s).tEnd, ...
-            stepDefs(s).y0, stepDefs(s).yFinal, ...
-            tolerance);
+    trackingMetrics(trackingMetricID).Controller = controller_type;
+    trackingMetrics(trackingMetricID).Step = stepDefs(1).Label;
+    trackingMetrics(trackingMetricID).ReactionTime = metrics.ReactionTime;
+    trackingMetrics(trackingMetricID).RiseTime = metrics.RiseTime;
+    trackingMetrics(trackingMetricID).Overshoot = metrics.Overshoot;
+    trackingMetrics(trackingMetricID).RMSE = metrics.RMSE;
+    trackingMetrics(trackingMetricID).SettlingTime = metrics.SettlingTime;
+    trackingMetrics(trackingMetricID).TotalEnergy = metrics.TotalEnergy;
 
-        trackingMetrics(trackingMetricID).Controller = controller_type;
-        trackingMetrics(trackingMetricID).Step = stepDefs(s).Label;
-        trackingMetrics(trackingMetricID).ReactionTime = metrics.ReactionTime;
-        trackingMetrics(trackingMetricID).RiseTime = metrics.RiseTime;
-        trackingMetrics(trackingMetricID).Overshoot = metrics.Overshoot;
-        trackingMetrics(trackingMetricID).RMSE = metrics.RMSE;
-        trackingMetrics(trackingMetricID).SettlingTime = metrics.SettlingTime;
-        trackingMetrics(trackingMetricID).TotalEnergy = metrics.TotalEnergy;
-
-        trackingMetricID = trackingMetricID + 1;
-    end
-
+    trackingMetricID = trackingMetricID + 1;
     trackingScenarioID = trackingScenarioID + 1;
 end
 
@@ -114,11 +102,9 @@ disp(' ')
 disp('--- Reference tracking table ---')
 disp(tracking_table)
 
-%% ============================================================
-%  DISTURBANCE REJECTION
-%  ============================================================
+%% Disturbance rejection simulations
 
-rejection_change_times  = [0 5 5 simTime]';
+rejection_change_times  = [0 5 5 disturbanceSimTime]';
 rejection_change_values = [0 0 1 1]';
 
 rejection_ref = timeseries(rejection_change_values, rejection_change_times);
@@ -155,14 +141,14 @@ for c = 1:length(controllers)
 
         simIn = simIn.setVariable('actuation_method', actuation_method);
         simIn = simIn.setVariable('simin', rejection_ref);
-        simIn = simIn.setVariable('simTime', simTime);
+        simIn = simIn.setVariable('simTime', disturbanceSimTime);
 
         simIn = simIn.setVariable('sine_amplitude', sine_amp);
         simIn = simIn.setVariable('constant_amplitude', constant_amp);
         simIn = simIn.setVariable('sine_frequency', sine_frequency_case);
         simIn = simIn.setVariable('disturbance_start_time', disturbance_start_time);
 
-        simIn = simIn.setModelParameter('StopTime', num2str(simTime));
+        simIn = simIn.setModelParameter('StopTime', num2str(disturbanceSimTime));
 
         simOut = sim(simIn);
 
@@ -191,7 +177,7 @@ for c = 1:length(controllers)
         metrics = computeDisturbanceRejectionMetrics( ...
             time, depth, reference, ...
             time_energy, total_energy, ...
-            disturbance_start_time, simTime, tolerance);
+            disturbance_start_time, disturbanceSimTime, tolerance);
 
         rejectionMetrics(rejectionScenarioID).Controller = controller_type;
         rejectionMetrics(rejectionScenarioID).DisturbanceType = disturbance_type;
@@ -213,9 +199,7 @@ disp(' ')
 disp('--- Disturbance rejection table ---')
 disp(disturbance_table)
 
-%% ============================================================
-%  LATEX TABLE: REFERENCE TRACKING
-%  ============================================================
+%% LaTeX table: reference tracking
 
 disp(' ')
 disp('--- LaTeX table: reference tracking ---')
@@ -223,13 +207,12 @@ disp('--- LaTeX table: reference tracking ---')
 fprintf('\\begin{table}[H]\n');
 fprintf('\\centering\n');
 fprintf('\\small\n');
-fprintf('\\caption{Reference tracking performance for the buoyancy-based actuation system using PID, Cascade PID and I-PD controllers. The metrics are evaluated separately for each reference step.}\n');
-fprintf('\\label{tab:tracking_results}\n');
-fprintf('\\begin{tabular}{llrrrrrr}\n');
+fprintf('\\caption{Reference tracking performance for the buoyancy-based actuation system using PID, Cascade PID and I-PD controllers. The metrics are evaluated for a single reference step from 0 to 1 m.}\n');
+fprintf('\\label{tab:tracking_results_buoyancy}\n');
+fprintf('\\begin{tabular}{llrrrrr}\n');
 fprintf('\\toprule\n');
 
 fprintf(['Controller & Step & ' ...
-         '\\makecell{Reaction\\\\[-1mm]time [s]} & ' ...
          '\\makecell{Rise\\\\[-1mm]time [s]} & ' ...
          '\\makecell{Overshoot\\\\[-1mm][\\%%]} & ' ...
          '\\makecell{RMSE\\\\[-1mm][m]} & ' ...
@@ -248,10 +231,9 @@ for i = 1:height(tracking_table)
 
     printControllerRowColor(controller_latex);
 
-    fprintf('%s & %s & %.2f & %.2f & %.1f & %.3f & %.2f & %s \\\\\n', ...
+    fprintf('%s & %s & %.2f & %.1f & %.3f & %.2f & %s \\\\\n', ...
         controller_latex, ...
         step_latex, ...
-        tracking_table.ReactionTime(i), ...
         tracking_table.RiseTime(i), ...
         tracking_table.Overshoot(i), ...
         tracking_table.RMSE(i), ...
@@ -263,9 +245,7 @@ fprintf('\\bottomrule\n');
 fprintf('\\end{tabular}\n');
 fprintf('\\end{table}\n');
 
-%% ============================================================
-%  LATEX TABLE: DISTURBANCE REJECTION - COMPACT
-%  ============================================================
+%% LaTeX table: disturbance rejection
 
 disp(' ')
 disp('--- LaTeX table: compact disturbance rejection ---')
@@ -274,7 +254,7 @@ fprintf('\\begin{table}[H]\n');
 fprintf('\\centering\n');
 fprintf('\\small\n');
 fprintf('\\caption{Disturbance rejection performance for the buoyancy-based actuation system using PID, Cascade PID and I-PD controllers.}\n');
-fprintf('\\label{tab:disturbance_rejection_results}\n');
+fprintf('\\label{tab:disturbance_rejection_results_buoyancy}\n');
 fprintf('\\begin{tabular}{llrrrrr}\n');
 fprintf('\\toprule\n');
 
@@ -294,17 +274,9 @@ for i = 1:height(disturbance_table)
     controller_latex = strrep(controller_latex, '_', '\\_');
 
     disturbance_latex = char(disturbance_table.DisturbanceType(i));
-
     energy_latex = formatEnergyTwoSigFigs(disturbance_table.EnergyAfterDisturbance(i));
 
-    % Row color depending on controller
-    if contains(controller_latex, 'Cascade PID')
-        fprintf('\\rowcolor{gray!15} ');
-    elseif contains(controller_latex, 'I-PD') || contains(controller_latex, 'I\\_PD')
-        fprintf('\\rowcolor{blue!8} ');
-    elseif strcmp(controller_latex, 'PID')
-        fprintf('\\rowcolor{green!10} ');
-    end
+    printControllerRowColor(controller_latex);
 
     fprintf('%s & %s & %.2f & %.2f & %.3f & %.3f & %s \\\\\n', ...
         controller_latex, ...
@@ -319,49 +291,50 @@ end
 fprintf('\\bottomrule\n');
 fprintf('\\end{tabular}\n');
 fprintf('\\end{table}\n');
-%% ============================================================
-%  PLOTS
-%  ============================================================
 
-%% Plot 1: Reference tracking and control signal
-figure('Color','w','Position',[100 100 1200 420]);
+%% Plot 1: Reference tracking
 
-subplot(1,2,1);
+figure('Color','w','Position',[100 100 1000 750]);
+
+subplot(2,1,1);
 hold on; grid on; box on;
 
 for i = 1:length(trackingResults)
     plot(trackingResults(i).time, trackingResults(i).depth, ...
-        'LineWidth', 1.8, ...
+        'LineWidth', 2.0, ...
         'DisplayName', char(trackingResults(i).controller));
 end
 
 stairs(trackingResults(1).time, trackingResults(1).reference, '--k', ...
-    'LineWidth', 1.5, ...
+    'LineWidth', 1.8, ...
     'DisplayName', 'Reference');
 
-xlabel('Time [s]');
-ylabel('Depth [m]');
-title('Depth reference tracking');
-legend('Location','southeast');
-set(gca,'FontSize',11);
+xlabel('Time [s]', 'FontSize', 14);
+ylabel('Depth [m]', 'FontSize', 14);
+title('Depth reference tracking', 'FontSize', 15);
+legend('Location','southeast', 'FontSize', 12);
+set(gca,'FontSize',13);
+xlim([0 trackingSimTime]);
 
-subplot(1,2,2);
+subplot(2,1,2);
 hold on; grid on; box on;
 
 for i = 1:length(trackingResults)
     plot(trackingResults(i).time, trackingResults(i).control_signal, ...
-        'LineWidth', 1.8, ...
+        'LineWidth', 2.0, ...
         'DisplayName', char(trackingResults(i).controller));
 end
 
-xlabel('Time [s]');
-ylabel('Control signal');
-title('Control signal during reference tracking');
-legend('Location','southeast');
-set(gca,'FontSize',11);
+xlabel('Time [s]', 'FontSize', 14);
+ylabel('Control signal', 'FontSize', 14);
+title('Control signal', 'FontSize', 15);
+legend('Location','southeast', 'FontSize', 12);
+set(gca,'FontSize',13);
+xlim([0 trackingSimTime]);
 
 %% Plot 2: Disturbance rejection cases
-figure('Color','w','Position',[100 100 1200 800]);
+
+figure('Color','w','Position',[100 100 1300 850]);
 
 freqs = [0.03 0.05 0.10];
 
@@ -378,7 +351,7 @@ for f = 1:length(freqs)
            abs(rejectionResults(i).sine_frequency - current_freq) < 1e-9
 
             plot(rejectionResults(i).time, rejectionResults(i).depth, ...
-                'LineWidth', 1.8, ...
+                'LineWidth', 2.0, ...
                 'DisplayName', char(rejectionResults(i).controller));
         end
     end
@@ -389,18 +362,21 @@ for f = 1:length(freqs)
 
     if ~isempty(idx)
         stairs(rejectionResults(idx).time, rejectionResults(idx).reference, '--k', ...
-            'LineWidth', 1.5, ...
+            'LineWidth', 1.8, ...
             'DisplayName', 'Reference');
     end
 
-    xline(disturbance_start_time, '--r', 'Disturbance applied', ...
-        'LabelVerticalAlignment','bottom');
+    xline(disturbance_start_time, '--r', ...
+        'Disturbance applied', ...
+        'LabelVerticalAlignment','bottom', ...
+        'HandleVisibility','off');
 
-    xlabel('Time [s]');
-    ylabel('Depth [m]');
-    title(sprintf('Sinusoidal disturbance: A = 0.5 N, f = %.2f Hz', current_freq));
-    legend('Location','southeast');
-    set(gca,'FontSize',10);
+    xlabel('Time [s]', 'FontSize', 14);
+    ylabel('Depth [m]', 'FontSize', 14);
+    title(sprintf('Sinusoidal disturbance: %.2f Hz', current_freq), 'FontSize', 15);
+    legend('Location','northwest', 'FontSize', 11);
+    set(gca,'FontSize',13);
+    xlim([0 disturbanceSimTime]);
 end
 
 subplot(2,2,4);
@@ -411,7 +387,7 @@ for i = 1:length(rejectionResults)
        rejectionResults(i).constant_disturbance > 0
 
         plot(rejectionResults(i).time, rejectionResults(i).depth, ...
-            'LineWidth', 1.8, ...
+            'LineWidth', 2.0, ...
             'DisplayName', char(rejectionResults(i).controller));
     end
 end
@@ -421,20 +397,24 @@ idxConst = find([rejectionResults.sine_disturbance] == 0 & ...
 
 if ~isempty(idxConst)
     stairs(rejectionResults(idxConst).time, rejectionResults(idxConst).reference, '--k', ...
-        'LineWidth', 1.5, ...
+        'LineWidth', 1.8, ...
         'DisplayName', 'Reference');
 end
 
-xline(disturbance_start_time, '--r', 'Disturbance applied', ...
-    'LabelVerticalAlignment','bottom');
+xline(disturbance_start_time, '--r', ...
+    'Disturbance applied', ...
+    'LabelVerticalAlignment','bottom', ...
+    'HandleVisibility','off');
 
-xlabel('Time [s]');
-ylabel('Depth [m]');
-title('Constant disturbance: A = 2 N');
-legend('Location','southeast');
-set(gca,'FontSize',10);
+xlabel('Time [s]', 'FontSize', 14);
+ylabel('Depth [m]', 'FontSize', 14);
+title('Constant disturbance: 2 N', 'FontSize', 15);
+legend('Location','northwest', 'FontSize', 11);
+set(gca,'FontSize',13);
+xlim([0 disturbanceSimTime]);
 
 %% Plot 3: Energy during reference tracking
+
 figure('Color','w','Position',[100 100 1100 420]);
 hold on; grid on; box on;
 
@@ -444,15 +424,14 @@ for i = 1:length(trackingResults)
         'DisplayName', char(trackingResults(i).controller));
 end
 
-xlabel('Time [s]');
-ylabel('Energy [J]');
-title('Energy during reference tracking');
-legend('Location','northeast');
-set(gca,'FontSize',11);
+xlabel('Time [s]', 'FontSize', 14);
+ylabel('Energy [J]', 'FontSize', 14);
+title('Energy during reference tracking', 'FontSize', 15);
+legend('Location','northeast', 'FontSize', 12);
+set(gca,'FontSize',13);
+xlim([0 trackingSimTime]);
 
-%% ============================================================
-%  LOCAL FUNCTIONS
-%  ============================================================
+%% Local functions
 
 function metrics = computeStepTrackingMetrics(time, depth, reference, ...
                                               time_energy, energy, ...

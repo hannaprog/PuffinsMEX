@@ -4,7 +4,7 @@ g = 9.81;
 rho = 1000;
 m_a = 0;
 
-d1 = 5;
+d1 = 2;
 C_d = 0.136;
 
 A_cross = 0.090; %utsida chassi
@@ -25,7 +25,7 @@ x_max = V_max / A;       % max slaglängd
 
 p_atm = 101325;
 V_air = 1000e-6;   
-rpm_max = 440;                             
+rpm_max = 150;                             
 F_stall = 700;
 
 % Hose flow limit
@@ -37,7 +37,7 @@ piston_vel_max = Q_max/A;
 
 V_supply = 11.1;
 I_move   = 1.5; 
-I_hold   = 0.5;  
+I_hold   = 0;  
 
 % %% PARAMETRAR - GRUNDMODELL
 % % Farkost
